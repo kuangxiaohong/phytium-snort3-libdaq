@@ -4,7 +4,8 @@
 m4_define([daq_major_version], [3])
 m4_define([daq_minor_version], [0])
 m4_define([daq_patch_version], [0])
-m4_define([daq_version_str], [daq_major_version.daq_minor_version.daq_patch_version])
+m4_define([daq_extra_version], [beta2])
+m4_define([daq_version_str], [daq_major_version.daq_minor_version.daq_patch_version-daq_extra_version])
 
 # Kill the 'divert' macro with extreme prejudice so it stops clashing with references
 # to the module directory of the same name.
@@ -12,7 +13,7 @@ m4_define([daq_version_str], [daq_major_version.daq_minor_version.daq_patch_vers
 m4_undefine([divert])
 
 AC_PREREQ([2.69])
-AC_INIT([libdaq],[daq_version_str],[snort-team@cisco.com])
+AC_INIT([daq],[daq_version_str],[snort-team@cisco.com])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_SRCDIR([api/daq.h])
 AC_CONFIG_HEADERS([config.h])
@@ -141,6 +142,22 @@ fi
 AM_CONDITIONAL([BUILD_AFPACKET_MODULE], [test "$enable_afpacket_module" = yes])
 AM_COND_IF([BUILD_AFPACKET_MODULE], [AC_CONFIG_FILES([modules/afpacket/libdaq_static_afpacket.pc])])
 
+# DPDK Module
+
+AC_ARG_ENABLE(dpdk-module,
+              AC_HELP_STRING([--disable-dpdk-module],[don't build the bundled dpdk module]),
+              [enable_dpdk_module="$enableval"], [enable_dpdk_module="$DEFAULT_ENABLE"])
+if test "$enable_dpdk_module" = yes; then
+    #AC_CHECK_HEADER([rte_config.h], [], [enable_dpdk_module=no])
+    if test "$enable_dpdk_module" = yes; then
+	AM_CPPFLAGS="$AM_CPPFLAGS -I${RTE_SDK}/${RTE_TARGET}/include/ -include ${RTE_SDK}/${RTE_TARGET}/include/rte_config.h "
+ 	DAQ_DPDK_LIBS=" -D_GNU_SOURCE -pthread -Wl,--no-as-needed -Wl,-export-dynamic -L${RTE_SDK}/${RTE_TARGET}/lib/ -Wl,-lrte_flow_classify -Wl,-lrte_pipeline -Wl,-lrte_table -Wl,-lrte_port -Wl,-lrte_pdump -Wl,-lrte_distributor -Wl,-lrte_ip_frag -Wl,-lrte_gro -Wl,-lrte_gso -Wl,-lrte_meter -Wl,-lrte_lpm -Wl,--whole-archive -Wl,-lrte_acl -Wl,--no-whole-archive -Wl,-lrte_jobstats -Wl,-lrte_metrics -Wl,-lrte_bitratestats -Wl,-lrte_latencystats -Wl,-lrte_power -Wl,-lrte_timer -Wl,-lrte_efd -Wl,--whole-archive -Wl,-lrte_cfgfile -Wl,-lrte_hash -Wl,-lrte_member -Wl,-lrte_vhost -Wl,-lrte_kvargs -Wl,-lrte_mbuf -Wl,-lrte_net -Wl,-lrte_ethdev -Wl,-lrte_cryptodev -Wl,-lrte_security -Wl,-lrte_eventdev -Wl,-lrte_mempool -Wl,-lrte_mempool_ring -Wl,-lrte_ring -Wl,-lrte_pci -Wl,-lrte_eal -Wl,-lrte_cmdline -Wl,-lrte_reorder -Wl,-lrte_sched -Wl,-lrte_kni -Wl,-lrte_bus_pci -Wl,-lrte_bus_vdev -Wl,-lrte_mempool_stack -Wl,-lrte_pmd_af_packet -Wl,-lrte_pmd_bond -Wl,-lrte_pmd_e1000 -Wl,-lrte_pmd_failsafe -Wl,-lrte_pmd_i40e -Wl,-lrte_pmd_ixgbe -Wl,-lrte_pmd_kni -Wl,-lrte_pmd_null -Wl,-lrte_pmd_ring -Wl,-lrte_pmd_softnic -Wl,-lrte_pmd_tap -Wl,-lrte_pmd_virtio -Wl,-lrte_pmd_vhost -Wl,-lrte_pmd_null_crypto -Wl,-lrte_pmd_crypto_scheduler -Wl,-lrte_pmd_skeleton_event -Wl,-lrte_pmd_sw_event -Wl,--no-whole-archive -Wl,-lrt -Wl,-lm -Wl,-lnuma -Wl,-ldl -Wl,-export-dynamic -Wl,--as-needed -Wl, ${RTE_SDK}/${RTE_TARGET}/lib/libdpdk.a "
+	AM_CFLAGS="$AM_CPPFLAGS"
+    fi
+fi
+AM_CONDITIONAL([BUILD_DPDK_MODULE], [test "$enable_dpdk_module" = yes])
+AM_COND_IF([BUILD_DPDK_MODULE], [AC_CONFIG_FILES([modules/dpdk/libdaq_static_dpdk.pc])])
+
 # BPF Wrapper Module
 AC_ARG_ENABLE(bpf-module,
               AS_HELP_STRING([--disable-bpf-module],[do not build the bundled BPF wrapper module]),
@@ -260,6 +277,7 @@ AM_CONDITIONAL([BUILD_MODULES], [test "$enable_afpacket_module" = yes -o \
                                       "$enable_bpf_module" = yes -o \
                                       "$enable_divert_module" = yes -o \
                                       "$enable_dump_module" = yes -o \
+				      "$enable_dpdk_module" = yes -o \
                                       "$enable_fst_module" = yes -o \
                                       "$enable_nfq_module" = yes -o \
                                       "$enable_pcap_module" = yes -o \
@@ -305,7 +323,7 @@ AC_SUBST(DAQ_DUMP_LIBS)
 AC_SUBST(DAQ_FST_LIBS)
 AC_SUBST(DAQ_NFQ_LIBS)
 AC_SUBST(DAQ_PCAP_LIBS)
-
+AC_SUBST(DAQ_DPDK_LIBS)
 if test "${CODE_COVERAGE_ENABLED}" = yes ; then
     CFLAGS=`echo $CFLAGS | ${SED} 's/-O\w//g'`
 fi
@@ -344,6 +362,7 @@ AC_MSG_RESULT([
 
     Build AFPacket DAQ module.. : $enable_afpacket_module
     Build BPF DAQ module....... : $enable_bpf_module
+    Build DPDK DAQ module.......: $enable_dpdk_module
     Build Divert DAQ module.... : $enable_divert_module
     Build Dump DAQ module...... : $enable_dump_module
     Build FST DAQ module....... : $enable_fst_module
