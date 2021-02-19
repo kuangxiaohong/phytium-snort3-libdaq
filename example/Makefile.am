@@ -48,3 +48,7 @@ if BUILD_TRACE_MODULE
 daqtest_static_CFLAGS += -DBUILD_TRACE_MODULE
 daqtest_static_LDADD += ${top_builddir}/modules/trace/libdaq_static_trace.la
 endif
+if BUILD_DPDK_MODULE
+daqtest_static_CFLAGS += -DBUILD_DPDK_MODULE
+daqtest_static_LDADD += ${top_builddir}/modules/dpdk/libdaq_static_dpdk.la $(DAQ_DPDK_LIBS)
+endif
