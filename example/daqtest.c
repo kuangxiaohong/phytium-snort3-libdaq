@@ -153,6 +153,9 @@ extern const DAQ_ModuleAPI_t netmap_daq_module_data;
 #ifdef BUILD_TRACE_MODULE
 extern const DAQ_ModuleAPI_t trace_daq_module_data;
 #endif
+#ifdef BUILD_DPDK_MODULE
+extern const DAQ_ModuleAPI_t dpdk_daq_module_data;
+#endif
 
 static DAQ_Module_h static_modules[] =
 {
@@ -183,6 +186,10 @@ static DAQ_Module_h static_modules[] =
 #ifdef BUILD_TRACE_MODULE
     &trace_daq_module_data,
 #endif
+#ifdef BUILD_DPDK_MODULE
+	&dpdk_daq_module_data,
+#endif
+
     NULL
 };
 #endif
@@ -1088,7 +1095,7 @@ static int parse_command_line(int argc, char *argv[], DAQTestConfig *cfg)
     cfg->default_verdict = DAQ_VERDICT_PASS;
     cfg->ping_action = PING_ACTION_PASS;
     cfg->batch_size = 16;
-    cfg->thread_count = 1;
+    cfg->thread_count = 2;
     cfg->group_id = -1;
     cfg->user_id = -1;
     cfg->module_configs = daqtest_module_config_new();
