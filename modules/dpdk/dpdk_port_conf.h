@@ -4,7 +4,7 @@
 #include "stdint.h"
 
 //can get from dpdk param
-#define NB_MBUF             (1024*1024) 
+#define NB_MBUF             (32*8192) 
 #define NB_SOCKETS        (8)
 
 /**

@@ -21,8 +21,8 @@
 #define MIN(v1, v2)	((v1) < (v2) ? (v1) : (v2))
 #endif
 
-#define RX_RING_SIZE       (4096)
-#define TX_RING_SIZE       (512)
+#define RX_RING_SIZE       (1024)
+#define TX_RING_SIZE       (1024)
 #define RSS_HASH_KEY_LENGTH 40
 #define PKT_PRIV_SIZE    (256)
 static uint32_t port_queue_num[RTE_MAX_ETHPORTS] = {0};
@@ -117,7 +117,7 @@ static inline void dpdk_port_init(dpdk_port_conf_t *dpdk_port_conf,uint16_t port
             .rss_conf = {
                 .rss_key = g_arrayHashKey,
 				.rss_key_len = RSS_HASH_KEY_LENGTH,
-                .rss_hf = ETH_RSS_UDP|ETH_RSS_TCP,
+                .rss_hf = ETH_RSS_IP,
             },
         },
         .txmode = {

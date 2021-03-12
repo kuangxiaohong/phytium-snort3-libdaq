@@ -22,6 +22,8 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#define _GNU_SOURCE             /* See feature_test_macros(7) */
+#include <sched.h>
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -45,6 +47,7 @@
 #include <daq_module_api.h>
 
 #include "decode.h"
+#define DPDK_TEST (1)
 
 typedef enum
 {
@@ -112,7 +115,8 @@ typedef struct _DAQTestThreadContext
     void *oldconfig;
     volatile bool done;
     volatile bool exited;
-} DAQTestThreadContext;
+	int  thread_id;
+}  __attribute__((aligned(64)))DAQTestThreadContext;
 
 typedef struct _DAQTestPacket
 {
@@ -755,8 +759,9 @@ static DAQ_Verdict handle_packet_message(DAQTestThreadContext *ctxt, DAQ_Msg_h m
     ctxt->packet_count++;
 
     if (cfg->delay)
+    {
         usleep(cfg->delay * 1000);
-
+    }
     if (cfg->performance_mode)
         return cfg->default_verdict;
 
@@ -1400,6 +1405,22 @@ static void print_config(DAQTestConfig *cfg)
         printf("  In performance mode, no decoding will be done!\n");
 }
 
+static inline int set_cpu(int i)  
+{  
+    cpu_set_t mask;  
+    CPU_ZERO(&mask);  
+  
+    CPU_SET(i,&mask);  
+  
+    printf("thread %u, i = %d\n", pthread_self(), i);  
+    if(-1 == pthread_setaffinity_np(pthread_self() ,sizeof(mask),&mask))  
+    {  
+    	printf("error set cpu!\n");
+        return -1;  
+    }  
+    return 0;  
+} 
+
 static void *processing_thread(void *arg)
 {
     DAQTestThreadContext *ctxt = (DAQTestThreadContext *) arg;
@@ -1436,6 +1457,15 @@ static void *processing_thread(void *arg)
 
     memset(recv_counters, 0, sizeof(recv_counters));
     max_recv = recv_cnt = timeout_count = 0;
+	
+	unsigned batch_size = cfg->batch_size;
+	
+	DAQ_RecvStatus rstat;
+
+	if ( set_cpu(ctxt->thread_id) )		
+		goto exit;
+		
+	
     while (!ctxt->done && (!cfg->packet_limit || ctxt->packet_count < cfg->packet_limit))
     {
         /* Check to see if a config swap is pending. */
@@ -1449,24 +1479,20 @@ static void *processing_thread(void *arg)
             ctxt->oldconfig = oldconfig;
         }
 
-
-        unsigned batch_size = cfg->batch_size;
         if (cfg->packet_limit)
-        {
+        {     
             unsigned long remainder = cfg->packet_limit - ctxt->packet_count;
             if (cfg->batch_size > remainder)
                 batch_size = remainder;
         }
 
-        DAQ_RecvStatus rstat;
         unsigned num_recv = daq_instance_msg_receive(ctxt->instance, batch_size, ctxt->msgs, &rstat);
         recv_counters[rstat]++;
+
         if (num_recv > max_recv)
             max_recv = num_recv;
-
         if (num_recv > 0)
             recv_cnt++;
-
         for (unsigned idx = 0; idx < num_recv; idx++)
         {
             DAQ_Msg_h msg = ctxt->msgs[idx];
@@ -1485,7 +1511,6 @@ static void *processing_thread(void *arg)
             }
             daq_instance_msg_finalize(ctxt->instance, msg, verdict);
         }
-
         if (rstat != DAQ_RSTAT_OK && rstat != DAQ_RSTAT_WOULD_BLOCK)
         {
             if (rstat == DAQ_RSTAT_TIMEOUT)
@@ -1501,7 +1526,7 @@ static void *processing_thread(void *arg)
             else if (rstat == DAQ_RSTAT_ERROR)
                 fprintf(stderr, "Error receiving messages: %s\n", daq_instance_get_error(ctxt->instance));
             break;
-        }
+        }	
     }
 
     printf("\nDAQ receive timed out %u times.\n", timeout_count);
@@ -1710,7 +1735,9 @@ int main(int argc, char *argv[])
     pthread_sigmask(SIG_BLOCK, &set, NULL);
     for (unsigned i = 0; i < cfg.thread_count; i++)
     {
+    	
         DAQTestThreadContext *dttc = &threads[i];
+		dttc->thread_id = i;
         if ((rval = pthread_create(&dttc->tid, NULL, processing_thread, dttc)) != 0)
         {
             fprintf(stderr, "Error creating thread: %s (%d)\n", strerror(errno), errno);

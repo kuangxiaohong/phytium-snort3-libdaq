@@ -99,6 +99,7 @@ typedef struct _daq_msg
     void *meta[DAQ_MSG_META_SLOTS]; /* Dynamic message metadata slots */
     DAQ_ModuleInstance_h owner;     /* Handle for the module instance this message belongs to */
     void *priv;                     /* Pointer to module instance's private data for this message (Optional) */
+	void *priv_mbuf;
     size_t hdr_len;                 /* Length of the header structure pointed to by 'hdr' */
     DAQ_MsgType type;               /* Message type (one of DAQ_MsgType or from the user-defined range) */
     uint32_t data_len;              /* Length of the data pointed to by 'data'.  Should be 0 if 'data' is NULL */
@@ -340,7 +341,7 @@ typedef struct _daq_stats
     uint64_t packets_filtered;          /* Packets filtered by this instance's BPF */
     uint64_t packets_injected;          /* Packets injected by this instance */
     uint64_t verdicts[MAX_DAQ_VERDICT]; /* Counters of packets handled per-verdict. */
-} DAQ_Stats_t;
+} __attribute__((aligned(64)))DAQ_Stats_t;
 
 typedef struct _daq_msg_pool_info
 {

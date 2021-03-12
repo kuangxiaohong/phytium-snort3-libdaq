@@ -24,13 +24,13 @@
 #include "dpdk_port_conf.h"
 #include "dpdk_param.h"
 
-#define INJECT_BUF_NUM (128)
+#define INJECT_BUF_NUM (1024*4)
 #define POOL_NAME_LEN (64)
 #define BURST_SIZE (32)
 #define DESC_POOL_NUM (2048)
 #define SET_ERROR(modinst, ...)    daq_base_api.set_errbuf(modinst, __VA_ARGS__)
 
-//#define HIGH_PERF_ENABLE (1)
+#define HIGH_PERF_ENABLE (1)
 #define DAQ_DPDK_VERSION 1915
 #define MEMPOOL_CACHE_SIZE  (64)
 typedef struct _dpdk_packet_pkt_desc
@@ -68,7 +68,17 @@ typedef struct _dpdk_packet_context
     struct rte_mempool *inject_mbuf_pool;
     volatile uint8_t interrupted;
     DAQ_Stats_t stats;	
-} DPDK_Packet_Context_t;
+}__attribute__((aligned(64))) DPDK_Packet_Context_t;
+
+static const DAQ_Verdict verdict_translation_table[MAX_DAQ_VERDICT] = {
+	DAQ_VERDICT_PASS,		/* DAQ_VERDICT_PASS */
+	DAQ_VERDICT_BLOCK,		/* DAQ_VERDICT_BLOCK */
+	DAQ_VERDICT_PASS,		/* DAQ_VERDICT_REPLACE */
+	DAQ_VERDICT_PASS,		/* DAQ_VERDICT_WHITELIST */
+	DAQ_VERDICT_BLOCK,		/* DAQ_VERDICT_BLACKLIST */
+	DAQ_VERDICT_PASS,		/* DAQ_VERDICT_IGNORE */
+	DAQ_VERDICT_BLOCK		/* DAQ_VERDICT_RETRY */
+};
 
 static DAQ_BaseAPI_t daq_base_api;
 static pthread_mutex_t bpf_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -229,7 +239,7 @@ static int dpdk_daq_instantiate(const DAQ_ModuleConfig_h modcfg, DAQ_ModuleInsta
 			dpdk_pctx->debug = 1;								
 		daq_base_api.config_next_variable(modcfg, &varKey, &varValue);
 	}
-
+	dpdk_pctx->stats.packets_received = 0;
 	dpdk_pctx->snaplen = daq_base_api.config_get_snaplen(modcfg);
 	dpdk_pctx->timeout = (int) daq_base_api.config_get_timeout(modcfg);
 	if (dpdk_pctx->timeout == 0)
@@ -246,6 +256,7 @@ static int dpdk_daq_instantiate(const DAQ_ModuleConfig_h modcfg, DAQ_ModuleInsta
 
 
 	dpdk_get_port_and_queue(&dpdk_pctx->port_id,&dpdk_pctx->queue_id);
+
     dpdk_pctx->modinst = modinst;
 	*ctxt_ptr = dpdk_pctx;
 	return rval;
@@ -321,8 +332,15 @@ static int dpdk_daq_start(void *handle)
     return DAQ_SUCCESS;
 }
 
-static int dpdk_inject_packet(DPDK_Packet_Context_t *dpdk_pctx, uint16_t out_port_id, uint16_t out_queue_id,const uint8_t *data, uint32_t data_len)
+static int dpdk_inject_packet(DPDK_Packet_Context_t *dpdk_pctx, DAQ_Msg_t *msg,uint16_t out_port_id, uint16_t out_queue_id,const uint8_t *data, uint32_t data_len)
 {
+#ifdef HIGH_PERF_ENABLE
+	struct rte_mbuf *mbuf = (struct rte_mbuf *)msg->priv_mbuf;
+	rte_pktmbuf_data_len(mbuf) = data_len;
+	//rte_pktmbuf_dump(stdout,mbuf,mbuf->pkt_len);
+	uint16_t nb_tx = rte_eth_tx_burst(out_port_id, out_queue_id, &mbuf, 1);
+
+#else
 	struct rte_mbuf *m;
 
 	m = rte_pktmbuf_alloc(dpdk_pctx->inject_mbuf_pool);
@@ -344,6 +362,7 @@ static int dpdk_inject_packet(DPDK_Packet_Context_t *dpdk_pctx, uint16_t out_por
 	}
 	rte_pktmbuf_free(m);
 
+#endif
 	dpdk_pctx->stats.packets_injected++;
 
     return DAQ_SUCCESS;
@@ -356,7 +375,7 @@ static int dpdk_daq_inject(void *handle, DAQ_MsgType type, const void *hdr, cons
     if (type != DAQ_MSG_TYPE_PACKET)
         return DAQ_ERROR_NOTSUP;
 
-    return dpdk_inject_packet(dpdk_pctx,dpdk_pctx->port_id,dpdk_pctx->queue_id,data,data_len);
+    return dpdk_inject_packet(dpdk_pctx,NULL,dpdk_pctx->port_id,dpdk_pctx->queue_id,data,data_len);
 }
 
 static int dpdk_daq_inject_relative(void *handle, const DAQ_Msg_t *msg, const uint8_t *data, uint32_t data_len, int reverse)
@@ -366,7 +385,7 @@ static int dpdk_daq_inject_relative(void *handle, const DAQ_Msg_t *msg, const ui
 	if (reverse)
 		reverse_port = dpdk_pctx->port_id % 2 ? (dpdk_pctx->port_id - 1):(dpdk_pctx->port_id + 1);
 	
-	return dpdk_inject_packet(dpdk_pctx,reverse_port,dpdk_pctx->queue_id,data,data_len);
+	return dpdk_inject_packet(dpdk_pctx,msg,reverse_port,dpdk_pctx->queue_id,data,data_len);
 }
 
 static int dpdk_daq_interrupt(void *handle)
@@ -470,6 +489,7 @@ static unsigned dpdk_daq_msg_receive(void *handle, const unsigned max_recv, cons
 		max_recv_ok = BURST_SIZE;
 
 	uint16_t nb_rx = rte_eth_rx_burst(dpdk_pctx->port_id, dpdk_pctx->queue_id, bufs, max_recv_ok);
+	dpdk_pctx->stats.packets_received += nb_rx;
 
 	for (loop = 0; loop < nb_rx; loop++)
     {    
@@ -478,7 +498,7 @@ static unsigned dpdk_daq_msg_receive(void *handle, const unsigned max_recv, cons
 		len = rte_pktmbuf_data_len(bufs[loop]);
 		
 		//rte_pktmbuf_dump(stdout,bufs[loop],bufs[loop]->pkt_len);
-
+#if 0
 #ifdef LIBPCAP_AVAILABLE			
 		if (dpdk_pctx->fcode.bf_insns && bpf_filter(dpdk_pctx->fcode.bf_insns, data, len, len) == 0)
 		{
@@ -487,11 +507,12 @@ static unsigned dpdk_daq_msg_receive(void *handle, const unsigned max_recv, cons
 			continue;
 		}
 #endif
-        dpdk_pctx->stats.packets_received++;
+#endif
 
 		DPDKPacketPktDesc *desc = dpdk_pctx->pool.freelist;
 		if (!desc)
 		{
+			printf("1111 addr:%p availabel:%d\n",desc,dpdk_pctx->pool.info.available);
 			rte_pktmbuf_free(bufs[loop]);
 			status = DAQ_RSTAT_NOBUF;
 			break;
@@ -507,12 +528,11 @@ static unsigned dpdk_daq_msg_receive(void *handle, const unsigned max_recv, cons
 
 #ifdef HIGH_PERF_ENABLE
 		msg->data = data;
-		msg->priv = bufs[loop];
+		msg->priv_mbuf = bufs[loop];
 #else
 		rte_memcpy(desc->data, data, len);
 		rte_pktmbuf_free(bufs[loop]);
 #endif
-
         /* Then, set up the DAQ packet header. */
         DAQ_PktHdr_t *pkthdr = &desc->pkthdr;
         pkthdr->ts.tv_sec = 0;
@@ -527,7 +547,9 @@ static unsigned dpdk_daq_msg_receive(void *handle, const unsigned max_recv, cons
         desc->next = NULL;
         dpdk_pctx->pool.info.available--;
         msgs[idx] = &desc->msg;
-        idx++;
+        idx++;	
+		//rte_pktmbuf_dump(stdout,bufs[loop],bufs[loop]->pkt_len);
+		//uint16_t nb_tx = rte_eth_tx_burst(dpdk_pctx->port_id, dpdk_pctx->queue_id, &bufs[loop], 1);
     }
 #if 0
 	if (!nb_rx && (dpdk_pctx->timeout != -1 ))
@@ -549,16 +571,6 @@ err:
     return idx;
 }
 
-static const DAQ_Verdict verdict_translation_table[MAX_DAQ_VERDICT] = {
-    DAQ_VERDICT_PASS,       /* DAQ_VERDICT_PASS */
-    DAQ_VERDICT_BLOCK,      /* DAQ_VERDICT_BLOCK */
-    DAQ_VERDICT_PASS,       /* DAQ_VERDICT_REPLACE */
-    DAQ_VERDICT_PASS,       /* DAQ_VERDICT_WHITELIST */
-    DAQ_VERDICT_BLOCK,      /* DAQ_VERDICT_BLACKLIST */
-    DAQ_VERDICT_PASS,       /* DAQ_VERDICT_IGNORE */
-    DAQ_VERDICT_BLOCK       /* DAQ_VERDICT_RETRY */
-};
-
 static int dpdk_daq_msg_finalize(void *handle, const DAQ_Msg_t *msg, DAQ_Verdict verdict)
 {
     DPDK_Packet_Context_t *dpdk_pctx = (DPDK_Packet_Context_t *) handle;
@@ -572,15 +584,22 @@ static int dpdk_daq_msg_finalize(void *handle, const DAQ_Msg_t *msg, DAQ_Verdict
 	dpdk_pctx->stats.verdicts[verdict]++;
 	verdict = verdict_translation_table[verdict];
 	if (verdict == DAQ_VERDICT_PASS)
-		dpdk_inject_packet(dpdk_pctx,dpdk_pctx->port_id,dpdk_pctx->queue_id,msg->data,msg->data_len);
+	{
+		dpdk_daq_inject_relative(dpdk_pctx,msg,msg->data,msg->data_len,0);
+	}
+	else
+	{
+#ifdef HIGH_PERF_ENABLE
+		struct rte_mbuf *mbuf = (struct rte_mbuf *)msg->priv_mbuf;
+		//rte_pktmbuf_dump(stdout,mbuf,mbuf->pkt_len);		
+		//uint16_t nb_tx = rte_eth_tx_burst(dpdk_pctx->port_id, dpdk_pctx->queue_id, &mbuf, 1);
+		rte_pktmbuf_free(mbuf);
+#endif
 
+	}
 	desc->next = dpdk_pctx->pool.freelist;
 	dpdk_pctx->pool.freelist = desc;
 	dpdk_pctx->pool.info.available++;
-
-#ifdef HIGH_PERF_ENABLE
-	rte_pktmbuf_free(msg->priv);
-#endif
 	return DAQ_SUCCESS;
 }
 
